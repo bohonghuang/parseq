@@ -8,6 +8,7 @@
          :append (cdr declaration))
    body))
 
+(defparameter *dynamic-extent-stack-list-allocation-p* #+sbcl t #-sbcl nil)
 (defparameter *flatten-local-functions-p* nil)
 
 (defmacro parser-lambda ((input-var) &body body)
@@ -18,47 +19,41 @@
                          (assert (eq input-var input-var-2))
                          (or (assoc-value *input-type-mappings* input :test #'type=) input))
                        input-var)))
-        (with-gensyms (block cons-pool cons car cdr cons-alloc cons-free)
+        (with-gensyms (block)
           `(lambda (,input-var &aux (,(intern (princ-to-string input)) ,input-var))
              (declare . ,declarations)
-             (let ((,cons-pool nil))
-               (flet ((,cons-alloc (,car ,cdr)
-                        (let ((,cons ,cons-pool))
-                          (if ,cons
-                              (progn
-                                (setf ,cons-pool (cdr ,cons-pool)
-                                      (car ,cons) ,car
-                                      (cdr ,cons) ,cdr)
-                                ,cons)
-                              (cons ,car ,cdr))))
-                      (,cons-free (,cons)
-                        (when ,cons
-                          (loop :for ,cons-free :on ,cons
-                                :unless (cdr ,cons-free)
-                                  :return (setf (cdr ,cons-free) ,cons-pool
-                                                ,cons-pool ,cons)))))
-                 (declare (ignorable #',cons-alloc #',cons-free) (inline ,cons-alloc ,cons-free))
-                 ,(call-with-input/compile
-                   (lambda (input)
-                     (let ((*codegen-input* input)
-                           (*codegen-blocks* (list block))
-                           (*codegen-cons* (lambda (car &optional (cdr nil cdrp))
-                                             (if cdrp
-                                                 `(,cons-alloc ,car ,cdr)
-                                                 `(,cons-free (shiftf ,car nil)))))
-                           (*codegen-make-list* (lambda (size)
-                                                  (with-gensyms (list)
-                                                    (push (cons list size) *codegen-list-vars*)
-                                                    list)))
-                           (*codegen-labels* (if *flatten-local-functions-p*
-                                                 (let ((local-functions nil))
-                                                   (lambda (functions-or-body &optional (body nil bodyp))
-                                                     (if bodyp
-                                                         (progn (nconcf local-functions functions-or-body) body)
-                                                         `(labels ,local-functions ,functions-or-body))))
-                                                 (lambda (functions-or-body &optional (body nil bodyp))
-                                                   (if bodyp
-                                                       `(labels ,functions-or-body ,body)
-                                                       functions-or-body)))))
-                       `(block ,block ,(funcall *codegen-labels* (with-fresh-stack (codegen (codegen-expand `(progn . ,body))))))))
-                   input)))))))))
+             ,(call-with-cons-pool/compile
+               (lambda (cons-alloc cons-free)
+                 (call-with-input/compile
+                  (lambda (input)
+                    (let ((*codegen-input* input)
+                          (*codegen-blocks* (list block))
+                          (*codegen-cons* (lambda (car &optional (cdr nil cdrp))
+                                            (if cdrp
+                                                `(,cons-alloc ,car ,cdr)
+                                                (if (and (listp car) (eq (first car) 'subseq))
+                                                    `(,cons-free (shiftf ,(second car) nil) ,(third car) ,(fourth car))
+                                                    `(,cons-free (shiftf ,car nil))))))
+                          (*codegen-make-list* (lambda (size)
+                                                 (with-gensyms (list)
+                                                   (if *dynamic-extent-stack-list-allocation-p*
+                                                       (progn
+                                                         (push (cons list size) *codegen-list-vars*)
+                                                         list)
+                                                       (progn
+                                                         (push (cons list (- size)) *codegen-list-vars*)
+                                                         `(setf ,list ,(loop :for form := nil :then (funcall *codegen-cons* nil form)
+                                                                             :repeat size
+                                                                             :finally (return form))))))))
+                          (*codegen-labels* (if *flatten-local-functions-p*
+                                                (let ((local-functions nil))
+                                                  (lambda (functions-or-body &optional (body nil bodyp))
+                                                    (if bodyp
+                                                        (progn (nconcf local-functions functions-or-body) body)
+                                                        `(labels ,local-functions ,functions-or-body))))
+                                                (lambda (functions-or-body &optional (body nil bodyp))
+                                                  (if bodyp
+                                                      `(labels ,functions-or-body ,body)
+                                                      functions-or-body)))))
+                      `(block ,block ,(funcall *codegen-labels* (with-fresh-stack (codegen (codegen-expand `(progn . ,body))))))))
+                  input)))))))))

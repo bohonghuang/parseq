@@ -7,7 +7,6 @@
 (defvar *codegen-make-list*)
 (defvar *codegen-labels*)
 
-(defparameter *dynamic-stack-list-allocation-p* t)
 (defparameter *merge-stack-list-allocation-p* nil)
 (defparameter *pseudo-parser-object-p* t)
 
@@ -16,35 +15,24 @@
     ((lambda lambda-list &rest body) (equal lambda-list body))))
 
 (defun call-with-fresh-stack (body)
-  (let ((codegen-list-vars (boundp '*codegen-list-vars*)))
-    (prog1 (let ((*codegen-list-vars* nil))
-             (let ((body (funcall body)))
-               (when codegen-list-vars
-                 (unless *dynamic-stack-list-allocation-p*
-                   (setf *codegen-list-vars* (loop :initially (setf codegen-list-vars nil)
-                                                   :for cons :in *codegen-list-vars*
-                                                   :if (zerop (cdr cons))
-                                                     :collect cons
-                                                   :else
-                                                     :do (push cons codegen-list-vars)))))
-               (with-gensyms (list)
-                 `(let* ,@(if *merge-stack-list-allocation-p*
-                              `(((,list (make-list ,(reduce #'+ *codegen-list-vars* :key #'cdr)))
-                                 . ,(loop :for (var . size) :in *codegen-list-vars*
-                                          :if (zerop size)
-                                            :collect `(,var nil)
-                                          :else
-                                            :collect `(,var (shiftf ,list (cdr (nthcdr ,(1- size) ,list)) nil))))
-                                (declare (dynamic-extent ,list)))
-                              `(,(loop :for (var . size) :in *codegen-list-vars*
-                                       :collect `(,var (make-list ,size)))
-                                (declare (dynamic-extent . ,(mapcar #'car *codegen-list-vars*)))))
-                    (prog1 ,body
-                      ,@(loop :for (var . size) :in *codegen-list-vars*
-                              :when (zerop size)
-                                :collect (funcall *codegen-cons* var)))))))
-      (when (consp codegen-list-vars)
-        (setf *codegen-list-vars* (nconc codegen-list-vars *codegen-list-vars*))))))
+  (let ((*codegen-list-vars* nil))
+    (let ((body (funcall body)))
+      (with-gensyms (list)
+        `(let* ,@(if *merge-stack-list-allocation-p*
+                     `(((,list (make-list ,(reduce #'+ *codegen-list-vars* :key (compose (curry #'max 0) #'cdr))))
+                        . ,(loop :for (var . size) :in *codegen-list-vars*
+                                 :if (plusp size)
+                                   :collect `(,var (shiftf ,list (cdr (nthcdr ,(1- size) ,list)) nil))
+                                 :else
+                                   :collect `(,var nil)))
+                       (declare (dynamic-extent ,list)))
+                     `(,(loop :for (var . size) :in *codegen-list-vars*
+                              :collect `(,var (make-list ,(max 0 size))))
+                       (declare (dynamic-extent . ,(mapcar #'car (remove-if-not #'plusp *codegen-list-vars* :key #'cdr))))))
+           (prog1 ,body
+             ,@(loop :for (var . size) :in *codegen-list-vars*
+                     :if (zerop size) :collect (funcall *codegen-cons* var)
+                     :else :if (minusp size) :collect (funcall *codegen-cons* `(subseq ,var 0 ,(abs size))))))))))
 
 (defmacro with-fresh-stack (form)
   `(call-with-fresh-stack (lambda () ,form)))

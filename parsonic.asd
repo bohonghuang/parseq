@@ -20,7 +20,8 @@
                                            (:file "expand")
                                            (:file "optimize")
                                            (:file "codegen" :depends-on ("input" "expand" "optimize"))
-                                           (:file "macro" :depends-on ("input" "expand" "codegen")))
+                                           (:file "pool")
+                                           (:file "macro" :depends-on ("input" "expand" "codegen" "pool")))
                               :depends-on ("package" "expand" "eval"))
                              (:file "macro" :depends-on ("package" "expand" "compile"))
                              (:module "sugar"
