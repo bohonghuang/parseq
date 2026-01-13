@@ -56,7 +56,10 @@
            :collect (cons key `(parser/funcall ,function ,op))))
     ((parser/constantly object)
      (declare (ignore object))
-     (list (cons '_ form)))))
+     (list (cons '_ form)))
+    ((parser/cut parser)
+     (loop :for (key . op) :in (extract-prefix parser)
+           :collect (cons key `(parser/cut ,op))))))
 
 (defparameter *branches-trie-threshold* 4)
 

@@ -175,7 +175,7 @@
          (if name
              (funcall *codegen-labels*
                       (list (list name lambda-list
-                                  (let ((*codegen-blocks* (list name)))
+                                  (let ((*codegen-blocks* (cons name *codegen-blocks*)))
                                     (with-fresh-stack (codegen body)))))
                       (codegen `(parser/call ,name . ,args)))
              `((lambda ,lambda-list ,(codegen body)) . ,args))))
@@ -236,7 +236,10 @@
                       :unless (eq key '_) :collect `((,key) ,(codegen parser)))
               (t . ,(if-let ((default (car (assoc-value branches '_))))
                       `(,(setf (input-position/compile *codegen-input*) position) ,(codegen default))
-                      `((return-from ,(car *codegen-blocks*) ,(codegen-parse-error position))))))))))))
+                      `((return-from ,(car *codegen-blocks*) ,(codegen-parse-error position)))))))))
+      ((parser/cut parser)
+       (let ((*codegen-blocks* (cons (lastcar *codegen-blocks*) *codegen-blocks*)))
+         (codegen parser))))))
 
 (defmethod expand-expr/compile ((op (eql 'funcall)) &rest args)
   (destructuring-bind (function &rest parsers) args

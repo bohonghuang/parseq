@@ -85,7 +85,7 @@
           result
           (parser-call (apply function result) input)))))
 
-(defun parser/failfast (parser)
+(defun parser/cut (parser)
   (lambda (input &aux (result (parser-call parser input)))
     (if (parser-error-p result)
         (throw 'parser-run result)

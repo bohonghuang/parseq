@@ -6,6 +6,7 @@
    #:parser-run
    #:parser-lambda
    #:for
+   #:cut
    #:opt
    #:repsep
    #:rep
