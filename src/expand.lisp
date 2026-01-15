@@ -42,9 +42,8 @@
     (destructuring-bind (object) args
       `(parser/constantly ,object)))
   (:method ((op (eql 'rep)) &rest args)
-    (destructuring-bind (parser &optional from to) args
-      (declare (ignore parser from to))
-      `(parser/rep ,(expand (car args)) . ,(cdr args))))
+    (destructuring-bind (parser from to) args
+      `(parser/rep ,(expand parser) ,from ,to)))
   (:method ((op (eql 'apply)) &rest args)
     (destructuring-bind (function parser) args
       `(parser/apply ,function ,(expand parser)))))

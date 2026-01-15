@@ -52,7 +52,7 @@
                   result-b)))
           result-a))))
 
-(defun parser/rep (parser &optional (from 0) (to most-positive-fixnum))
+(defun parser/rep (parser from to)
   (check-type from non-negative-fixnum)
   (check-type to non-negative-fixnum)
   (assert (<= from to))
