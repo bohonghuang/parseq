@@ -156,6 +156,9 @@
                  (result `(,function . ,(let ((*codegen-make-list* (or (ignore-results-p) *codegen-make-list*)))
                                           (mapcar #'codegen args)))))
             (if *pseudo-parser-object-p* result `(funcall ,result))))))
+      ((parser/apply function parser)
+       (with-gensyms (arg)
+         (codegen `(parser/funcall (lambda (,arg) (apply ,function ,arg)) ,parser))))
       ((parser/let name lambda-list body)
        (multiple-value-bind (lambda-list args)
            (if (intersection lambda-list lambda-list-keywords)
@@ -241,9 +244,9 @@
        (let ((*codegen-blocks* (cons (lastcar *codegen-blocks*) *codegen-blocks*)))
          (codegen parser))))))
 
-(defmethod expand-expr/compile ((op (eql 'funcall)) &rest args)
-  (destructuring-bind (function &rest parsers) args
-    `(parser/funcall
+(defmethod expand-expr/compile ((op (eql 'apply)) &rest args)
+  (destructuring-bind (function parser) args
+    `(parser/apply
       ,(labels ((walk (form)
                   (typecase form
                     (null form)
@@ -253,4 +256,4 @@
                        ((t &rest args) (cons (car form) (mapcar #'walk args)))))
                     (t form))))
          (walk function))
-      . ,(mapcar #'expand parsers))))
+      ,(expand parser))))

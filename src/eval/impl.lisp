@@ -76,14 +76,11 @@
 (defun parser/constantly (object)
   (constantly object))
 
-(defun parser/funcall (function &rest parsers)
-  (let ((parser (loop :for cdr := (parser/constantly nil) :then (parser/cons car cdr)
-                      :for car :in (nreverse parsers)
-                      :finally (return cdr))))
-    (lambda (input &aux (result (parser-call parser input)))
-      (if (parser-error-p result)
-          result
-          (parser-call (apply function result) input)))))
+(defun parser/apply (function parser)
+  (lambda (input &aux (result (parser-call parser input)))
+    (if (parser-error-p result)
+        result
+        (parser-call (apply function result) input))))
 
 (defun parser/cut (parser)
   (lambda (input &aux (result (parser-call parser input)))

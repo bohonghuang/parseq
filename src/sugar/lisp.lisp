@@ -1,5 +1,9 @@
 (in-package #:parsonic)
 
+(defmethod expand-expr ((op (eql 'funcall)) &rest args)
+  (destructuring-bind (function &rest args) args
+    (expand `(apply ,function (list . ,args)))))
+
 (defmethod expand-expr ((op (eql 'list)) &rest args)
   (loop :for body := '(parser/constantly nil) :then `(parser/cons ,(expand arg) ,body)
         :for arg :in (reverse args)
