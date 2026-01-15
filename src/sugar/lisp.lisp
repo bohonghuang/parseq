@@ -9,12 +9,6 @@
         :for arg :in (reverse args)
         :finally (return body)))
 
-(defmethod expand-expr :around ((op (eql 'or)) &rest args)
-  (case (length args)
-    (0 (expand '(satisfies (constantly nil))))
-    (1 (expand (first args)))
-    (t (apply #'call-next-method (reduce (curry #'list 'or) args :from-end t)))))
-
 (defmethod expand-expr ((op (eql 'progn)) &rest args)
   (with-gensyms (var)
     (expand `(for ((nil (list . ,(butlast args)))

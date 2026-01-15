@@ -30,5 +30,6 @@
                               :components ((:file "quote")
                                            (:file "map")
                                            (:file "lisp" :depends-on ("map"))
-                                           (:file "predef" :depends-on ("lisp")))
+                                           (:file "override")
+                                           (:file "predef" :depends-on ("lisp" "override")))
                               :depends-on ("package" "expand" "macro"))))))
