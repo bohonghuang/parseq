@@ -191,7 +191,7 @@
                 (return-from ,(car *codegen-blocks*) ,(codegen-parse-error))
                 ,result))))
       ((parser/constantly object) object)
-      ((parser/rep parser &optional (from 0) (to most-positive-fixnum))
+      ((parser/rep parser from to)
        (with-gensyms (block block-outer counter list position cons-root cons)
          (push (cons list 0) *codegen-list-vars*)
          (if-let ((make-list (funcall *codegen-make-list* 1)))

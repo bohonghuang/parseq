@@ -34,7 +34,7 @@
                            :collect (cons key `(parser/cons ,op-car ,op-cdr)))
             :else
               :collect (cons key `(parser/cons ,op-car ,cdr)))))
-    ((parser/rep parser &optional (from 0) (to most-positive-fixnum))
+    ((parser/rep parser from to)
      (if (integerp from)
          (extract-merge-branches
           (nconc
