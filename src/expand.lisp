@@ -48,6 +48,6 @@
     (destructuring-bind (parser &optional from to) args
       (declare (ignore parser from to))
       `(parser/rep ,(expand (car args)) . ,(cdr args))))
-  (:method ((op (eql 'funcall)) &rest args)
-    (destructuring-bind (function &rest parsers) args
-      `(parser/funcall ,function . ,(mapcar #'expand parsers)))))
+  (:method ((op (eql 'apply)) &rest args)
+    (destructuring-bind (function parser) args
+      `(parser/apply ,function ,(expand parser)))))

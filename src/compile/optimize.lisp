@@ -3,8 +3,8 @@
 (defun conses->list (form)
   (if (consp form)
       (destructuring-case form
-        ((parser/funcall function &rest parsers)
-         `(parser/funcall ,function . ,(mapcar #'conses->list parsers)))
+        (((parser/funcall parser/apply) function &rest parsers)
+         `(,(car form) ,function . ,(mapcar #'conses->list parsers)))
         ((parser/cons car cdr)
          (let ((rest (conses->list cdr)))
            (destructuring-case rest
@@ -14,6 +14,16 @@
               `(parser/cons ,(conses->list car) ,rest)))))
         ((parser/constantly value) (if (eq value nil) '(parser/list) form))
         ((t &rest args) (cons (car form) (mapcar #'conses->list args))))
+      form))
+
+(defun apply->funcall (form)
+  (if (consp form)
+      (destructuring-case form
+        ((parser/apply function parser)
+         (if (eq (car parser) 'parser/list)
+             `(parser/funcall ,function . ,(mapcar #'apply->funcall (cdr parser)))
+             `(parser/apply ,function ,(apply->funcall parser))))
+        ((t &rest args) (cons (car form) (mapcar #'apply->funcall args))))
       form))
 
 (defun flatmap->map (form)
@@ -38,6 +48,8 @@
                         ,@body)
                       . ,(mapcar #'flatmap->map parsers))))))
               ((t &rest args) (declare (ignore args)) `(parser/funcall ,function . ,(mapcar #'flatmap->map parsers)))))))
+        ((parser/apply function parser)
+         `(parser/apply ,function ,(flatmap->map parser)))
         ((t &rest args) (declare (ignore args)) (cons (car form) (mapcar #'flatmap->map (cdr form)))))
       form))
 
@@ -46,6 +58,8 @@
 (defun eql-list->eql* (form)
   (if (consp form)
       (destructuring-case form
+        (((parser/funcall parser/apply) function &rest parsers)
+         `(,(car form) ,function . ,(mapcar #'eql-list->eql* parsers)))
         ((parser/list &rest parsers)
          (if (and (every (curry #'eq 'parser/eql) (mapcar #'car parsers))
                   (> (length parsers) *inline-sequence-eql-threshold*))
@@ -55,7 +69,7 @@
          (cons (car form) (mapcar #'eql-list->eql* (cdr form)))))
       form))
 
-(defparameter *optimize-passes* '(or->trie conses->list flatmap->map eql-list->eql*))
+(defparameter *optimize-passes* '(or->trie conses->list apply->funcall flatmap->map eql-list->eql*))
 
 (defun optimize/compile (initial)
   (loop :for form := initial :then (funcall pass form)
