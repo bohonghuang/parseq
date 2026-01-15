@@ -27,9 +27,9 @@
                               :depends-on ("package" "expand" "eval"))
                              (:file "macro" :depends-on ("package" "expand" "compile"))
                              (:module "sugar"
-                              :components ((:file "quote")
-                                           (:file "map")
-                                           (:file "lisp" :depends-on ("map"))
+                              :components ((:file "eql")
+                                           (:file "for")
+                                           (:file "lisp" :depends-on ("for"))
                                            (:file "override")
                                            (:file "predef" :depends-on ("lisp" "override")))
                               :depends-on ("package" "expand" "macro"))))))

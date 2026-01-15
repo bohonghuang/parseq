@@ -1,5 +1,20 @@
 (in-package #:parseq)
 
+(defun satisfies->eql (form)
+  (if (consp form)
+      (destructuring-case form
+        (((parser/funcall parser/apply) function &rest parsers)
+         `(,(car form) ,function . ,(mapcar #'satisfies->eql parsers)))
+        ((parser/satisfies predicate)
+         (if (consp predicate)
+             (let ((object (caddr predicate)))
+               (if (equal predicate `(curry #'eql ,object))
+                   `(parser/eql ,object)
+                   form))
+             form))
+        ((t &rest args) (cons (car form) (mapcar #'satisfies->eql args))))
+      form))
+
 (defun ors->or (form)
   (if (consp form)
       (destructuring-case form
@@ -85,7 +100,7 @@
          (cons (car form) (mapcar #'eql-list->eql* (cdr form)))))
       form))
 
-(defparameter *optimize-passes* '(ors->or or->trie conses->list apply->funcall flatmap->map eql-list->eql*))
+(defparameter *optimize-passes* '(satisfies->eql ors->or or->trie conses->list apply->funcall flatmap->map eql-list->eql*))
 
 (defun optimize/compile (initial)
   (loop :for form := initial :then (funcall pass form)

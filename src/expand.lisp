@@ -29,9 +29,6 @@
   (:method ((op (eql 'satisfies)) &rest args)
     (destructuring-bind (predicate) args
       `(parser/satisfies ,predicate)))
-  (:method ((op (eql 'eql)) &rest args)
-    (destructuring-bind (object) args
-      `(parser/eql ,object)))
   (:method ((op (eql 'cons)) &rest args)
     (destructuring-bind (car cdr) args
       `(parser/cons ,(expand car) ,(expand cdr))))
