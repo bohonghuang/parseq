@@ -2,7 +2,8 @@
 
 (defmethod expand-expr :around ((op (eql 'satisfies)) &rest args)
   (destructuring-bind (predicate) args
-    (if (equal predicate '(constantly nil))
+    (if (or (equal predicate '(constantly nil))
+            (and (consp predicate) (equal predicate `(curry #'eql ,(caddr predicate)))))
         (call-next-method)
         (call-next-method
          op (with-gensyms (result)

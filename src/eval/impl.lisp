@@ -22,13 +22,6 @@
         result
         (parser-error :position position :expected pred))))
 
-(defun parser/eql (object)
-  (let ((parser (parser/satisfies (curry #'eql object))))
-    (lambda (input &aux (result (parser-call parser input)))
-      (when (parser-error-p result)
-        (setf (parser-error-expected result) object))
-      result)))
-
 (defun parser/cons (car cdr)
   (lambda (input)
     (let ((car (parser-call car input)))
