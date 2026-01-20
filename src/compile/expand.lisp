@@ -88,15 +88,31 @@
     `(parser/let nil ,lexical-env ,form)
     form))
 
+(defun remove-intermediates (form)
+  (if (consp form)
+      (destructuring-case form
+        (((parser/funcall parser/apply) function &rest parsers)
+         `(,(car form) ,(walk-parsers-in-lambda #'remove-intermediates function) . ,(mapcar #'remove-intermediates parsers)))
+        (((parser/unit parser/let) &rest args)
+         (remove-intermediates (lastcar args)))
+        ((t &rest args) (cons (car form) (mapcar #'remove-intermediates args))))
+      form))
+
 (defun %expand-expr/compile (name lambda-list args body)
   (receive-lexical-env
    (let ((lambda-list-args (loop :for (name default-value) :in (mapcar #'ensure-list lambda-list)
                                  :collect (cons name (if-let ((cons (assoc name args))) (cdr cons) default-value)))))
      (if-let ((fdef (loop :for fdef :in *expand/compile-known*
-                          :for ((fname . fargs) . nil) := fdef
+                          :for ((fname fargs-type fargs) . nil) := fdef
                           :when (eq name fname)
-                            :when (loop :for (name . value) :in fargs
-                                        :always (equal (assoc-value lambda-list-args name) value))
+                            :when (ecase fargs-type
+                                    (:args (loop :for (name . value) :in fargs
+                                                 :always (equal (assoc-value lambda-list-args name) value)))
+                                    (:parsers (loop :for (name . value) :in fargs
+                                                    :for arg := (assoc-value lambda-list-args name)
+                                                    :when (member (car (ensure-list value)) '(curry rcurry))
+                                                      :return nil
+                                                    :always (equal (remove-intermediates (expand/compile arg)) value))))
                               :return fdef)))
        (let ((fname (etypecase (cdr fdef)
                       (boolean (setf (cdr fdef) (gensym (string name))))
@@ -105,8 +121,8 @@
                :until (eq fdef caller-fdef)
                :unless (cdr caller-fdef)
                  :do (setf (cdr caller-fdef) t))
-         `(parser/call ,fname . ,(mapcar #'cdr (remove-if (rcurry #'member (cdar fdef) :key #'car) args :key #'car))))
-       (let ((parser-arg-names (cons nil nil))
+         `(parser/call ,fname . ,(mapcar #'cdr (remove-if (rcurry #'member (caddar fdef) :key #'car) args :key #'car))))
+       (Let ((parser-arg-names (cons nil nil))
              (parser-arg-cache (or *expand/compile-args* (make-hash-table :test #'eq))))
          (let* ((lexical-args
                   (loop :with sequential-binding-p := nil
@@ -114,9 +130,7 @@
                         :if (member name lambda-list-keywords)
                           :do (setf sequential-binding-p t)
                         :else
-                          :append (let ((*expand/compile-env* (if sequential-binding-p
-                                                                  (append lexical-args *expand/compile-env*)
-                                                                  *expand/compile-env*)))
+                          :append (let ((*expand/compile-env* (if sequential-binding-p (append lexical-args *expand/compile-env*) *expand/compile-env*)))
                                     (labels ((recur (name value)
                                                (typecase value
                                                  ((cons (member curry rcurry) list)
@@ -129,26 +143,31 @@
                 (arg-info (ensure-gethash
                            name parser-arg-cache
                            (let ((*expand/compile-env* lexical-args)
-                                 (*expand/compile-known* (cons (cons (cons name args) nil) *expand/compile-known*))
+                                 (*expand/compile-known* (cons (cons (list name :args args) nil) *expand/compile-known*))
                                  (*expand/compile-args* parser-arg-cache))
                              (expand/compile body)
                              (loop :for arg :in lambda-list
                                    :for (name) := (ensure-list arg)
                                    :collect (cons name (member name parser-arg-names))))))
                 (parser-arg-names (mapcar #'car (remove-if-not #'cdr arg-info)))
-                (parsers (mapcar (lambda (name) (cons name (assoc-value args name))) parser-arg-names))
+                (parsers (loop :for (name . value) :in lambda-list-args
+                               :when (member name parser-arg-names)
+                                 :if (member (car (ensure-list value)) '(curry rcurry))
+                                   :collect (cons name '#:curry)
+                                 :else
+                                   :collect (cons name (remove-intermediates (expand/compile value)))))
                 (lambda-list (loop :for arg :in lambda-list
                                    :unless (member (car (ensure-list arg)) parser-arg-names)
                                      :collect arg))
                 (variables (loop :for (name . value) :in args
                                  :unless (member name parser-arg-names)
                                    :collect (list name value)))
-                (known (cons (cons (cons name parsers) nil) *expand/compile-known*))
+                (known (cons (cons (list name :parsers parsers) nil) *expand/compile-known*))
                 (result (let ((*expand/compile-env* lexical-args)
                               (*expand/compile-known* known)
                               (*expand/compile-args* parser-arg-cache))
                           (expand/compile body)))
-                (signature (list (cons name parsers) lambda-list))
+                (signature (list (cons name (mapcar #'cdr parsers)) lambda-list))
                 (lambda-list (if (intersection lambda-list lambda-list-keywords)
                                  (append lambda-list '(&initial) variables)
                                  (progn
@@ -236,6 +255,6 @@
 (defparser f3 (i)
   (f2 (curry #'ff (cc i) 2) 1))
 
-(codegen-expand '(f3 10))
+(remove-intermediates (codegen-expand '(f3 10)))
 
 (funcall (curry (curry #'list 2) 1))
