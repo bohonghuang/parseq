@@ -8,14 +8,30 @@
 (defvar *expand/compile-known* nil)
 (defvar *expand/compile-args* nil)
 
-(defstruct parser-arg
+(defstruct lexical-arg
   (parser #'values :type function)
-  (binding nil :type list)
   (value nil :type t))
 
-(defmethod make-load-form ((arg parser-arg) &optional env)
-  (declare (ignore env))
-  (parser-arg-value arg))
+(defgeneric lexical-arg-send (arg))
+(defgeneric lexical-arg-receive (arg))
+
+(defstruct (parser-arg (:include lexical-arg))
+  (binding nil :type list))
+
+(defmethod lexical-arg-send ((arg parser-arg))
+  (reverse (parser-arg-binding arg)))
+
+(defmethod lexical-arg-receive ((arg parser-arg))
+  (parser-arg-binding arg))
+
+(defstruct (curry-arg (:include lexical-arg))
+  (binding nil :type list))
+
+(defmethod lexical-arg-send ((arg curry-arg))
+  (curry-arg-binding arg))
+
+(defmethod lexical-arg-receive ((arg curry-arg))
+  nil)
 
 (defgeneric expand/compile (form)
   (:method ((expr list))
@@ -24,14 +40,14 @@
   (:method ((symbol symbol))
     (assert (not (keywordp symbol)))
     (if-let ((cons (assoc symbol *expand/compile-env*)))
-      (funcall (parser-arg-parser (cdr cons)))
+      (funcall (lexical-arg-parser (cdr cons)))
       symbol)))
 
 (defun receive-lexical-env (form)
   (if-let ((lexical-env
             (loop :for (name . arg) :in *expand/compile-env*
-                  :for binding := (parser-arg-binding arg)
-                  :when (eq name (first binding))
+                  :for binding := (lexical-arg-receive arg)
+                  :when binding
                     :unless (member (first binding) bindings :key #'first)
                       :collect binding :into bindings
                   :finally (return bindings))))
@@ -40,8 +56,9 @@
 
 (defun send-lexical-env (form env)
   (if-let ((lexical-env (loop :for (name . arg) :in env
-                              :for (var val) := (parser-arg-binding arg)
-                              :collect (list val var))))
+                              :for binding := (lexical-arg-send arg)
+                              :when binding
+                                :collect binding)))
     `(parser/let nil ,lexical-env ,form)
     form))
 
@@ -77,14 +94,14 @@
                                :value value)))))
               (curry-arg (name value &optional (parent-env *expand/compile-env*))
                 (let (arg)
-                  (setf arg (make-parser-arg
+                  (setf arg (make-curry-arg
                              :parser (lambda (&optional (function #'expand/compile))
-                                       (setf (first (parser-arg-binding arg)) (second (parser-arg-binding arg)))
+                                       (setf (curry-arg-binding arg) nil)
                                        (let ((*expand/compile-env* parent-env))
                                          (funcall function value)))
-                             :binding (list value name)
+                             :binding (list name value)
                              :value name)))))
-         (let* ((lambda-list-args
+         (let* ((lexical-args
                   (loop :with sequential-binding-p := nil
                         :for (name default-value) :in (mapcar #'ensure-list lambda-list)
                         :for value := (if-let ((cons (assoc name args))) (cdr cons) default-value)
@@ -92,23 +109,21 @@
                           :do (setf sequential-binding-p t)
                         :else
                           :nconc (let ((*expand/compile-env* (if sequential-binding-p
-                                                                 (append lambda-list-args *expand/compile-env*)
+                                                                 (append lexical-args *expand/compile-env*)
                                                                  *expand/compile-env*)))
                                    (labels ((recur (name value)
                                               (typecase value
-                                                (parser-arg
-                                                 (list (cons name (parser-arg name (parser-arg-value value)))))
                                                 ((cons (member curry rcurry) list)
                                                  (let ((curry-args (loop :for arg :in (cdr value)
                                                                          :collect (with-gensyms (curry) (cons curry (curry-arg curry arg))))))
                                                    (cons (cons name (parser-arg name (cons (car value) (mapcar #'cdr curry-args)))) curry-args)))
                                                 (t (list (cons name (parser-arg name value)))))))
                                      (recur name value)))
-                            :into lambda-list-args
-                        :finally (return lambda-list-args)))
+                            :into lexical-args
+                        :finally (return lexical-args)))
                 (arg-info (ensure-gethash
                            name parser-arg-cache
-                           (let ((*expand/compile-env* lambda-list-args)
+                           (let ((*expand/compile-env* lexical-args)
                                  (*expand/compile-known* (cons (cons (cons name args) nil) *expand/compile-known*))
                                  (*expand/compile-args* parser-arg-cache))
                              (expand/compile body)
@@ -120,11 +135,11 @@
                 (lambda-list (loop :for arg :in lambda-list
                                    :unless (member (car (ensure-list arg)) parser-arg-names)
                                      :collect arg))
-                (variables (loop :for (name . nil) :in args
+                (variables (loop :for (name . value) :in args
                                  :unless (member name parser-arg-names)
-                                   :collect (list name (parser-arg-value (assoc-value lambda-list-args name)))))
+                                   :collect (list name value)))
                 (known (cons (cons (cons name parsers) nil) *expand/compile-known*))
-                (result (let ((*expand/compile-env* lambda-list-args)
+                (result (let ((*expand/compile-env* lexical-args)
                               (*expand/compile-known* known)
                               (*expand/compile-args* parser-arg-cache))
                           (expand/compile body)))
@@ -134,7 +149,7 @@
                                  (progn
                                    (assert (equal lambda-list (mapcar #'first variables)))
                                    variables)))
-                (result (send-lexical-env result lambda-list-args))
+                (result (send-lexical-env result lexical-args))
                 (fname (cdr (first known)))
                 (result (if fname result `(parser/unit ,signature ,result)))
                 (result (etypecase fname
@@ -178,8 +193,8 @@
   (destructuring-bind (function &rest args) args
     (labels ((recur (object largs rargs)
                (etypecase object
-                 (parser-arg
-                  (funcall (parser-arg-parser object) (rcurry #'recur largs rargs)))
+                 (lexical-arg
+                  (funcall (lexical-arg-parser object) (rcurry #'recur largs rargs)))
                  (symbol
                   (recur (assoc-value *expand/compile-env* object) largs rargs))
                  (cons
@@ -191,12 +206,12 @@
                     ((function function)
                      (let ((*expand/compile-env* (nconc
                                                   (loop :for arg :in (append largs rargs)
-                                                        :when (parser-arg-p arg)
-                                                          :collect (cons (second (parser-arg-binding arg)) arg))
+                                                        :when (curry-arg-p arg)
+                                                          :collect (cons (curry-arg-value arg) arg))
                                                   *expand/compile-env*))
                            (args (loop :for arg :in (append largs rargs)
-                                       :if (parser-arg-p arg)
-                                         :collect (parser-arg-value arg)
+                                       :if (curry-arg-p arg)
+                                         :collect (curry-arg-value arg)
                                        :else
                                          :collect arg)))
                        (expand/compile `(,function . ,args)))))))))
