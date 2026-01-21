@@ -110,8 +110,6 @@
                                                  :always (equal (assoc-value lambda-list-args name) value)))
                                     (:parsers (loop :for (name . value) :in fargs
                                                     :for arg := (assoc-value lambda-list-args name)
-                                                    :when (member (car (ensure-list value)) '(curry rcurry))
-                                                      :return nil
                                                     :always (equal (remove-intermediates (expand/compile arg)) value))))
                               :return fdef)))
        (let ((fname (etypecase (cdr fdef)
@@ -123,6 +121,7 @@
                  :do (setf (cdr caller-fdef) t))
          `(parser/call ,fname . ,(mapcar #'cdr (remove-if (rcurry #'member (caddar fdef) :key #'car) args :key #'car))))
        (Let ((parser-arg-names (cons nil nil))
+             (curry-arg-names (cons nil nil))
              (parser-arg-cache (or *expand/compile-args* (make-hash-table :test #'eq))))
          (let* ((lexical-args
                   (loop :with sequential-binding-p := nil
@@ -135,7 +134,7 @@
                                                (typecase value
                                                  ((cons (member curry rcurry) list)
                                                   (let ((curry-args (loop :for arg :in (cdr value) :collect (curry-arg arg))))
-                                                    (cons (parser-arg name (cons (car value) curry-args) parser-arg-names) curry-args)))
+                                                    (cons (parser-arg name (cons (car value) curry-args) curry-arg-names) curry-args)))
                                                  (t (list (parser-arg name value parser-arg-names))))))
                                       (recur name value)))
                             :into lexical-args
@@ -148,19 +147,18 @@
                              (expand/compile body)
                              (loop :for arg :in lambda-list
                                    :for (name) := (ensure-list arg)
-                                   :collect (cons name (member name parser-arg-names))))))
-                (parser-arg-names (mapcar #'car (remove-if-not #'cdr arg-info)))
+                                   :collect (cons name (cond ((member name parser-arg-names) :parser)
+                                                             ((member name curry-arg-names) :curry)))))))
+                (parser-arg-names (mapcar #'car (remove :parser arg-info :key #'cdr :test-not #'eq)))
+                (curry-arg-names (mapcar #'car (remove :curry arg-info :key #'cdr :test-not #'eq)))
                 (parsers (loop :for (name . value) :in lambda-list-args
                                :when (member name parser-arg-names)
-                                 :if (member (car (ensure-list value)) '(curry rcurry))
-                                   :collect (cons name '#:curry)
-                                 :else
-                                   :collect (cons name (remove-intermediates (expand/compile value)))))
+                                 :collect (cons name (remove-intermediates (expand/compile value)))))
                 (lambda-list (loop :for arg :in lambda-list
-                                   :unless (member (car (ensure-list arg)) parser-arg-names)
+                                   :unless (member (car (ensure-list arg)) (append parser-arg-names curry-arg-names))
                                      :collect arg))
                 (variables (loop :for (name . value) :in args
-                                 :unless (member name parser-arg-names)
+                                 :unless (member name (append parser-arg-names curry-arg-names))
                                    :collect (list name value)))
                 (known (cons (cons (list name :parsers parsers) nil) *expand/compile-known*))
                 (result (let ((*expand/compile-env* lexical-args)
@@ -257,4 +255,4 @@
 
 (remove-intermediates (codegen-expand '(f3 10)))
 
-(funcall (curry (curry #'list 2) 1))
+;; (funcall (curry (curry #'list 2) 1))
