@@ -17,3 +17,7 @@
        (parser
         (or ((lambda (result) (setf value result) (parser (or))) parser)
             ((lambda () (if (eq value #1#) (parser (or)) (parser (constantly value)))))))))))
+
+(defparser not (parser)
+  (let ((time (or (progn (peek parser) (constantly 1)) (constantly 0))))
+    (rep (or) time)))

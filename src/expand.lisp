@@ -1,12 +1,9 @@
 (in-package #:parsonic)
 
-(defun parser-name-symbol (name)
-  (intern
-   (format nil "~A/~A" (string '#:parser) name)
-   (let ((package (symbol-package name)))
-     (if (eq package #.(find-package :cl))
-         (find-package '#:parsonic)
-         package))))
+(defun parser-name-symbol (name &optional (intern t))
+  (let ((package (if (eq (symbol-package name) #.(find-package :cl)) #.(find-package '#:parsonic) (symbol-package name)))
+        (name (format nil "~A/~A" (string '#:parser) name)))
+    (if intern (intern name package) (find-symbol name package))))
 
 (declaim (type function *expand*))
 (defvar *expand* #'expand/eval)
@@ -22,7 +19,8 @@
 
 (defgeneric expand-expr (op &rest args)
   (:method ((symbol symbol) &rest args)
-    `(,(if (fboundp symbol) symbol (parser-name-symbol symbol)) . ,(mapcar #'expand args)))
+    `(,(or (parser-name-symbol symbol nil) (if (fboundp symbol) symbol (parser-name-symbol symbol)))
+      . ,(mapcar #'expand args)))
   (:method ((op (eql 'quote)) &rest args)
     (destructuring-bind (object) args
       (expand-quote object)))
