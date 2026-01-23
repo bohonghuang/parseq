@@ -58,6 +58,9 @@
                    (,var ,(lastcar args)))
                ,var))))
 
+(defmethod expand-expr ((op (eql 'and)) &rest args)
+  (expand `(progn . ,args)))
+
 (defmethod expand-expr ((op (eql 'prog1)) &rest args)
   (with-gensyms (var)
     (expand `(for ((,var ,(first args))
