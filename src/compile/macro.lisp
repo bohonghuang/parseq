@@ -1,6 +1,5 @@
 (in-package #:parsonic)
 
-(defparameter *emulate-stack-allocation-p* '(#-(or sbcl ccl) t))
 (defparameter *flatten-local-functions-p* nil)
 
 (defmacro parser-lambda ((input-var) &body body)
@@ -15,23 +14,11 @@
           `(lambda (,input-var &aux (,(intern (princ-to-string input)) ,input-var))
              (declare . ,declarations)
              ,(call-with-cons-pool/compile
-               (lambda (cons-alloc cons-free)
+               (lambda ()
                  (call-with-input/compile
                   (lambda (input)
                     (let ((*codegen-input* input)
                           (*codegen-blocks* (list block))
-                          (*codegen-cons* (lambda (car &optional (cdr nil cdrp))
-                                            (if cdrp
-                                                `(,cons-alloc ,car ,cdr)
-                                                (if (and (listp car) (eq (first car) 'subseq))
-                                                    `(,cons-free (shiftf ,(second car) nil) ,(third car) ,(fourth car))
-                                                    `(,cons-free (shiftf ,car nil))))))
-                          (*codegen-make-list* (lambda (size)
-                                                 (with-gensyms (list)
-                                                   (when *emulate-stack-allocation-p*
-                                                     (setf size (- size)))
-                                                   (push (cons list size) *codegen-list-vars*)
-                                                   list)))
                           (*codegen-labels* (let ((local-functions nil))
                                               (lambda (functions-or-body &optional (body nil bodyp))
                                                 (if *flatten-local-functions-p*
