@@ -3,7 +3,7 @@
 (defparameter *emulate-stack-allocation-p* '(#-(or sbcl ccl) t))
 
 (defun call-with-cons-pool/compile (thunk)
-  (with-gensyms (cons-pool cons car cdr list cons-next cons-alloc cons-free copy-list)
+  (with-gensyms (cons-pool cons car cdr cons-alloc cons-free)
     `(let ((,cons-pool nil))
        (declare (ignorable ,cons-pool))
        (flet ((,cons-alloc (,car ,cdr)
@@ -16,17 +16,8 @@
                         ,cons)
                       (cons ,car ,cdr))))
               (,cons-free (,cons)
-                (prog1 ,cons-pool (setf ,cons-pool ,cons)))
-              (,copy-list (,list)
-                (loop :for (,car . ,cdr) :on (or ,list (return))
-                      :for ,cons := (or ,cons-pool (return (copy-list ,list))) :then ,cons-next
-                      :for ,cons-next := (cdr ,cons)
-                      :do (setf (car ,cons) ,car)
-                      :while ,cons-next
-                      :finally
-                         (setf (cdr ,cons) (copy-list ,cdr))
-                         (return (shiftf ,cons-pool ,cons-next)))))
-         (declare (ignorable #',cons-alloc #',cons-free #',copy-list) (inline ,cons-alloc ,cons-free))
+                (prog1 ,cons-pool (setf ,cons-pool ,cons))))
+         (declare (ignorable #',cons-alloc #',cons-free) (inline ,cons-alloc ,cons-free))
          ,(labels ((codegen-cons (&optional (car nil carp) (cdr nil cdrp))
                      (if carp
                          (if cdrp
@@ -40,10 +31,7 @@
                              (setf dimensions (loop :for size :in (ensure-list dimensions) :collect (- (abs size)))))
                            (push (cons list dimensions) *codegen-list-vars*)
                            list)
-                         #'codegen-make-list))
-                   (codegen-copy-list (&optional (list nil listp))
-                     (if listp `(,copy-list ,list) #'codegen-copy-list)))
+                         #'codegen-make-list)))
             (let ((*codegen-cons* #'codegen-cons)
-                  (*codegen-make-list* #'codegen-make-list)
-                  (*codegen-copy-list* #'codegen-copy-list))
+                  (*codegen-make-list* #'codegen-make-list))
               (funcall thunk)))))))

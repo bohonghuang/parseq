@@ -5,7 +5,6 @@
 (defvar *codegen-list-vars*)
 (defvar *codegen-cons*)
 (defvar *codegen-make-list*)
-(defvar *codegen-copy-list*)
 (defvar *codegen-labels*)
 
 (defparameter *merge-stack-list-allocation-p* nil)
@@ -14,10 +13,6 @@
 (defun function-identity-p (form)
   (destructuring-case form
     ((lambda lambda-list &rest body) (equal lambda-list body))))
-
-(defun function-copy-list-p (form)
-  (destructuring-case form
-    ((lambda lambda-list &rest body) (equal (list (cons 'copy-list lambda-list)) body))))
 
 (defun codegen-parse-error (&optional (value (input-position/compile *codegen-input*)))
   `(values ,value t))
@@ -181,10 +176,9 @@
                               :into body
                           :finally (return `(let ,vars ,@body ,(apply function vars))))))
              (let ((function `(lambda ,(remove nil lambda-list) . ,body)))
-               (cond
-                 ((function-identity-p function) (body (curry #'list 'progn)))
-                 ((function-copy-list-p function) (body *codegen-copy-list*))
-                 (t (with-fresh-stack (body (curry #'list function)))))))))
+               (if (function-identity-p function)
+                   (body (curry #'list 'progn))
+                   (with-fresh-stack (body (curry #'list function))))))))
       ((parser/unit signature parser)
        (declare (ignore signature))
        (codegen parser))
