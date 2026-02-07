@@ -1,20 +1,5 @@
 (in-package #:parsonic)
 
-(defun list->conses-1 (form)
-  (destructuring-ecase form
-    ((parser/list &rest args)
-     (if args
-         `(parser/cons ,(car args) ,(list->conses-1 `(parser/list . ,(cdr args))))
-         `(parser/constantly nil)))))
-
-(defun conses->list-1 (form)
-  (destructuring-ecase form
-    ((parser/cons car cdr)
-     `(parser/list ,car . ,(cdr (conses->list-1 cdr))))
-    ((parser/constantly null)
-     (assert (null null))
-     `(parser/list))))
-
 (defun ors->or-1 (form)
   (destructuring-case form
     ((parser/or &rest parsers)
@@ -27,19 +12,31 @@
                   :collect form)))
     ((t &rest args) (declare (ignore args)) form)))
 
+(defun cse-or-delete-duplicates (form)
+  (destructuring-ecase form
+    ((parser/or &rest args)
+     (let ((args (delete-duplicates args :test #'equal)))
+       (if (= (length args) 1)
+           (first args)
+           (cons (car form) args))))))
+
 (defun cse-extract-prefix-merge-branches (branches)
   (loop :for signature :in (delete-duplicates (mapcar #'car branches) :test #'equal)
         :collect (cons signature (let ((branches (mapcar #'cdr (remove signature branches :key #'car :test-not #'equal))))
-                                   (if (= (length branches) 1)
-                                       (first branches)
-                                       (cons `(parser/or . ,(delete-duplicates (mapcar #'car branches) :test #'equal))
-                                             `(parser/or . ,(delete-duplicates (mapcar #'cdr branches) :test #'equal))))))))
+                                   (cons (cse-or-delete-duplicates `(parser/or . ,(mapcar #'car branches)))
+                                         (cse-or-delete-duplicates `(parser/or . ,(mapcar #'cdr branches))))))))
 
 (defun cse-extract-prefix-fail-p (branches)
   (and (= (length branches) 1) (eq (car (first branches)) t)))
 
-(defvar *cse-var*)
 (defvar *cse-units*)
+(defvar *cse-count* 0)
+(defvar *cse-vars* nil)
+
+(defun cse-var ()
+  (let ((symbol (intern (format nil "~A-~D" '#:cse-var *cse-count*) #.*package*)))
+    (setf (get symbol 'cse-var) *cse-count*)
+    symbol))
 
 (defun cse-extract-prefix (form)
   (macrolet ((ensure-success (results)
@@ -49,10 +46,7 @@
                       ,results))))
     (destructuring-ecase form
       (((parser/satisfies parser/eql parser/constantly parser/call) &rest args)
-       (declare (ignore args))
-       ;; (list (list* t form '(parser/or)))
-       nil
-       )
+       (declare (ignore args)))
       ((parser/or &rest branches)
        (let ((subbranches-list (mapcar #'cse-extract-prefix branches)))
          (cse-extract-prefix-merge-branches
@@ -69,31 +63,44 @@
        (loop :for (signature . (then . else)) :in (cse-extract-prefix car)
              :collect (list* signature `(parser/cons ,then ,cdr) `(parser/cons ,else ,cdr))))
       ((parser/rep parser from to)
-       (if (integerp from)
-           (loop :for (signature . (then . else)) :in (cse-extract-prefix parser)
-                 :collect (list* signature
-                                 `(parser/cons ,then (parser/rep ,parser ,(max (1- from) 0) (1- ,to)))
-                                 (let ((else `(parser/cons ,else (parser/rep ,parser ,(max (1- from) 0) (1- ,to)))))
-                                   (if (plusp from) else `(parser/or ,else (parser/constantly nil))))))
-           nil
-           ;; (list (list* t form '(parser/or)))
-           ))
+       (when (integerp from)
+         (loop :for (signature . (then . else)) :in (cse-extract-prefix parser)
+               :collect (list* signature
+                               `(parser/cons ,then (parser/rep ,parser ,(max (1- from) 0) (1- ,to)))
+                               (let ((else `(parser/cons ,else (parser/rep ,parser ,(max (1- from) 0) (1- ,to)))))
+                                 (if (plusp from) else `(parser/or ,else (parser/constantly nil))))))))
       ((parser/unit signature body)
        (destructuring-bind (name lambda-list) signature
-         (let ((results (cons
-                         (list* signature `(parser/constantly ,*cse-var*) `(parser/or))
-                         (loop :for (branch-signature . (then . else)) :in (cse-extract-prefix body)
-                               :collect (list* branch-signature
-                                               `(parser/unit ((+ ,branch-signature ,name) ,lambda-list) ,then)
-                                               `(parser/unit ((- ,branch-signature ,name) ,lambda-list) ,else))))))
-           (push (cons form results) (gethash signature *cse-units*))
+         (let* ((signature (loop :for arg :in (lambda-list-arguments lambda-list)
+                                 :for cons := (assoc arg *cse-vars*)
+                                 :when cons
+                                   :if (constantp (cdr cons))
+                                     :collect (list arg (cdr cons)) :into args
+                                   :else
+                                     :return nil
+                                 :finally (return (list name args))))
+                (results (nconc
+                          (when signature (list (list* signature `(parser/constantly ,(cse-var)) `(parser/or))))
+                          (loop :for (branch-signature . (then . else)) :in (cse-extract-prefix body)
+                                :collect (list* branch-signature
+                                                `(parser/unit ((+ ,branch-signature ,name) (,(cse-var) . ,lambda-list)) ,then)
+                                                `(parser/unit ((- ,branch-signature ,name) ,lambda-list) ,else))))))
+           (when signature (push (cons form results) (gethash signature *cse-units*)))
            results)))
       ((parser/let name bindings body)
-       (if name
-           nil
-           ;; (list (list* t form '(parser/or)))
-           (loop :for (signature . (then . else)) :in (cse-extract-prefix body)
-                 :collect (list* signature `(parser/let ,name ,bindings ,then) `(parser/let ,name ,bindings ,else)))))
+       (unless name
+         (loop :for (signature . (then . else)) :in (let ((*cse-vars* (nconc (nreverse
+                                                                              (loop :for binding :in bindings
+                                                                                    :unless (symbolp binding)
+                                                                                      :collect (cons (first binding) (second binding))))
+                                                                             *cse-vars*)))
+                                                      (cse-extract-prefix body))
+               :collect (list* signature (if (eq (first then) 'parser/constantly)
+                                             (progn
+                                               (assert (get (second then) 'cse-var))
+                                               then)
+                                             `(parser/let ,name ,bindings ,then))
+                               (if (equal else '(parser/or)) else `(parser/let ,name ,bindings ,else))))))
       ((parser/apply function parser)
        (loop :for (signature . (then . else)) :in (cse-extract-prefix parser)
              :collect (list* signature `(parser/apply ,function ,then)
@@ -121,127 +128,42 @@
 (defparameter *cse-threshold* 2)
 
 (defun or->cse (form)
-  (if (consp form)
-      (destructuring-case form
-        ((parser/or &rest args)
-         (if (>= (length args) *cse-threshold*)
-             (with-gensyms (*cse-var*)
-               (let ((*cse-units* (make-hash-table :test #'equal)))
-                 (if-let ((units (remove 1 (cse-extract-prefix form) :key (compose #'length (rcurry #'gethash *cse-units*) #'car))))
-                   (destructuring-bind (signature . (then . else))
-                       (first (sort units #'> :key (compose #'length #'cdr #'first (rcurry #'gethash *cse-units*) #'car)))
-                     `(parser/or
-                       (parser/funcall
-                        (lambda (,*cse-var*) (with-codegen ,(or->cse (ors->or-1 then))))
-                        ,(or->cse (car (first (gethash signature *cse-units*)))))
-                       ,(or->cse (ors->or-1 else))))
-                   (cons (car form) (mapcar #'or->cse args)))))
-             (cons (car form) (mapcar #'or->cse args))))
-        ((t &rest args) (cons (car form) (mapcar #'or->cse args))))
-      form))
-
-(defparser test-0 ()
-  '"123")
-
-(defparser test-3 ()
-  '"888")
-
-(defparser test-1 ()
-  (rep (or (test-0) (test-3)))
-  '"123"
-  (constantly 123))
-
-(defparser test-2 ()
-  (or (test-0) (test-3))
-  '"456"
-  (constantly 456))
-
-(defparameter *optimize-passes* '(let->body satisfies->eql ors->or
-                                  conses->list apply->funcall
-                                  flatmap->map flatmap->let let->body
-                                  lexical->unit-args remove-intermediate-units or->cse))
-
-;; or->trie eql-list->eql*
-
-(with-open-file (stream #P"/tmp/临时/test.txt" :direction :output :if-exists :supersede)
-  (print (codegen-expand
-          '(yamson::yaml-value -1))
-         stream)
-  nil)
-
-(with-open-file (stream #P"/tmp/临时/test.txt" :direction :output :if-exists :supersede)
-  (print *
-         stream)
-  nil)
-
-(circular-tree-p *)
-
-(parsonic::extract/compile (codegen-expand '(yamson::yaml-value -1)))
-
-((codegen-expand '(yamson::yaml-value -1)))
-
-(defun validate-1 (form)
-  (let ((table (make-hash-table :test #'equal)))
-    (labels ((recur (form)
-               (if (consp form)
-                   (destructuring-case form
-                     (((parser/funcall parser/apply) function &rest parsers)
-                      (walk-parsers-in-lambda #'recur function)
-                      (mapc #'recur parsers))
-                     ((parser/unit signature body)
-                      (push body (gethash signature table))
-                      (recur body))
-                     ((t &rest args) (mapc #'recur args)))
-                   form)))
-      (recur form)
-      table)))
-
-(defun tree-soft-equal (a b)
-  (if (symbolp a)
-      (if (symbolp b)
-          (or (eq a b) (and (null (symbol-package a)) (null (symbol-package b))))
-          nil)
-      (if (consp a)
-          (if (consp b)
-              (and (tree-soft-equal (car a) (car b))
-                   (tree-soft-equal (cdr a) (cdr b)))
-              nil)
-          (equal a b))))
-
-(defun validate-2 (table)
-  (loop :for signature :being :each hash-key :of table :using (hash-value bodies)
-        :do (loop :for (a b) :on bodies
-                  :while b
-                  :do (assert (tree-soft-equal a b)))
-        :collect signature))
-
-(defun validate (form)
-  (validate-2 (validate-1 form)))
-
-(validate (codegen-expand '(yamson::yaml-value -1)))
-
-(extract/compile (codegen-expand '(yamson::yaml-value -1)))
-
-(let ((*optimize-passes* '(let->body satisfies->eql ors->or
-                           conses->list apply->funcall
-                           flatmap->map flatmap->let let->body
-                           or->trie eql-list->eql*)))
-  (codegen-expand '(yamson::yaml-value -1)))
-
-(defun parse-string (string)
-  (check-type string (simple-array character (*)))
-  (funcall
-   (parser-lambda (input)
-     (declare (type (simple-array character (*)) input)
-              (optimize (speed 3) (debug 0) (safety 0)))
-     (or (test-1) (test-2)))
-   string))
-
-(codegen-expand
- '(or (test-1) (test-1) (test-2) (test-2)))
-
-(parse-string "123123")
-
-(codegen-expand
- '(yamson::yaml-value -1)
- )
+  (labels ((or->cse (form)
+             (typecase form
+               (cons
+                (destructuring-case form
+                  (((parser/apply parser/funcall) function &rest args)
+                   (list* (car form) (let ((*cse-count* 0)) (or->cse function)) (mapcar #'or->cse args)))
+                  ((parser/or &rest args)
+                   (if (>= (length args) *cse-threshold*)
+                       (let ((*cse-units* (make-hash-table :test #'equal)))
+                         (let ((extract-units (cse-extract-prefix form)))
+                           (if-let ((units (remove 1 extract-units :key (compose #'list-length (rcurry #'gethash *cse-units*) #'car))))
+                             (destructuring-bind (signature . (then . else))
+                                 (first (sort units #'> :key (compose #'list-length #'cdr #'first (rcurry #'gethash *cse-units*) #'car)))
+                               (ors->or-1
+                                `(parser/or
+                                  (parser/funcall
+                                   (lambda (,(cse-var))
+                                     (with-codegen ,(let ((*cse-count* (1+ *cse-count*))) (or->cse (ors->or-1 then)))))
+                                   (parser/let nil ,(second signature) ,(or->cse (car (first (gethash signature *cse-units*))))))
+                                  ,(or->cse (cse-or-delete-duplicates (ors->or-1 else))))))
+                             #1=(cons (car form)
+                                      (let ((cse-count *cse-count*))
+                                        (multiple-value-bind (branches count)
+                                            (loop :for arg :in args
+                                                  :for *cse-count* := cse-count
+                                                  :collect (or->cse arg) :into branches
+                                                  :minimize *cse-count* :into count
+                                                  :finally (return (values branches count)))
+                                          (setf *cse-count* (min *cse-count* count))
+                                          branches))))))
+                       #1#))
+                  ((t &rest args) (cons (car form) (mapcar #'or->cse args)))))
+               (symbol
+                (when-let ((count (get form 'cse-var)))
+                  (setf *cse-count* (min *cse-count* count)))
+                form)
+               (t form))))
+    (prog1 (or->cse (remove-intermediate-units (lexical->unit-args form)))
+      (assert (zerop *cse-count*)))))
